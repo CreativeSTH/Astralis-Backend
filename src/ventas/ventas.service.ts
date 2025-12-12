@@ -59,6 +59,12 @@ export class VentasService {
         item.productoId,
         item.cantidad
       );
+
+      // AGREGAR ESTA LÍNEA: Incrementar contador de vendidos
+      await this.productosService.incrementarVendido(
+        item.productoId,
+        item.cantidad
+      );
     }
 
     // Calcular cuotas
@@ -167,7 +173,6 @@ export class VentasService {
   async findOne(id: string): Promise<VentaDocument> {
     const venta = await this.ventaModel
       .findById(id)
-      .populate('clienteId')
       .exec();
     
     if (!venta) {

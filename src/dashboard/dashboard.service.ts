@@ -72,7 +72,7 @@ export class DashboardService {
   private async calcularTotalInvertido(): Promise<number> {
     const productos = await this.productoModel.find({ activo: true }).exec();
     return productos.reduce(
-      (sum, producto) => sum + (producto.precioCompra * producto.stock),
+      (sum, producto) => sum + (producto.inversionTotal || 0),
       0
     );
   }

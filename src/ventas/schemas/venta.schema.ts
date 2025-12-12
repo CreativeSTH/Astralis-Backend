@@ -56,7 +56,7 @@ export class Venta {
   _id?: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'Cliente', required: true })
-  clienteId: Types.ObjectId;
+clienteId: Types.ObjectId | { _id: Types.ObjectId };
 
   @Prop({ required: true })
   nombreCliente: string;

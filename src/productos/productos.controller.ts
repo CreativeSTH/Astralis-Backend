@@ -12,6 +12,7 @@ import {
 import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
+import { AddStockDto } from './dto/add-stock.dto';
 
 @Controller('productos')
 export class ProductosController {
@@ -28,6 +29,26 @@ export class ProductosController {
     return this.productosService.findAll();
   }
 
+  @Get('estadisticas')
+  getEstadisticas() {
+    return this.productosService.getEstadisticas();
+  }
+
+  @Get('con-stock')
+  findConStock() {
+    return this.productosService.findConStock();
+  }
+
+  @Get('sin-stock')
+  findSinStock() {
+    return this.productosService.findSinStock();
+  }
+
+  @Get('mas-vendidos')
+  findMasVendidos() {
+    return this.productosService.findMasVendidos(5);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.productosService.findOne(id);
@@ -36,6 +57,11 @@ export class ProductosController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateProductoDto: UpdateProductoDto) {
     return this.productosService.update(id, updateProductoDto);
+  }
+
+  @Patch(':id/add-stock')
+  addStock(@Param('id') id: string, @Body() addStockDto: AddStockDto) {
+    return this.productosService.addStock(id, addStockDto);
   }
 
   @Delete(':id')

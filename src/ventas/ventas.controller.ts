@@ -52,7 +52,9 @@ export class VentasController {
     @Param('id') id: string,
     @Body('numeroCuota') numeroCuota: number,
     @Body('fechaPago') fechaPago: Date,
+    
   ) {
+    console.log('fechaPago recibido:', fechaPago, typeof fechaPago);
     return this.ventasService.registrarPagoCuota(id, numeroCuota, fechaPago);
   }
 
