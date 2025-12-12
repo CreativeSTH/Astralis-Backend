@@ -9,6 +9,11 @@ export enum EstadoVenta {
   VENCIDA = 'VENCIDA',
 }
 
+export enum TipoVenta {
+  CREDITO = 'CREDITO',
+  CONTADO = 'CONTADO',
+}
+
 @Schema()
 export class ProductoVenta {
   @Prop({ type: Types.ObjectId, ref: 'Producto', required: true })
@@ -38,6 +43,12 @@ export class Cuota {
   @Prop({ required: true })
   monto: number;
 
+  @Prop({ default: 0 })
+  montoPagado: number; // NUEVO: Monto pagado de esta cuota
+
+  @Prop({ default: 0 })
+  saldoPendiente: number; // NUEVO: Saldo pendiente de esta cuota
+
   @Prop({ default: false })
   pagada: boolean;
 
@@ -46,6 +57,9 @@ export class Cuota {
 
   @Prop({ default: false })
   pagoTardio: boolean;
+
+  @Prop({ type: [Date], default: [] })
+  fechasPagosAbonos?: Date[]; // NUEVO: Historial de fechas de abonos
 }
 
 const ProductoVentaSchema = SchemaFactory.createForClass(ProductoVenta);
@@ -56,7 +70,7 @@ export class Venta {
   _id?: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'Cliente', required: true })
-clienteId: Types.ObjectId | { _id: Types.ObjectId };
+  clienteId: Types.ObjectId | { _id: Types.ObjectId };
 
   @Prop({ required: true })
   nombreCliente: string;
@@ -66,6 +80,13 @@ clienteId: Types.ObjectId | { _id: Types.ObjectId };
 
   @Prop({ required: true })
   totalVenta: number;
+
+  @Prop({ 
+    type: String, 
+    enum: TipoVenta, 
+    default: TipoVenta.CREDITO 
+  })
+  tipoVenta: TipoVenta; // NUEVO
 
   @Prop({ required: true })
   numeroCuotas: number;

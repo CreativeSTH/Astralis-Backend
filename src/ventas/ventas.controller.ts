@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
+import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
 
 @Controller('ventas')
 export class VentasController {
@@ -52,10 +53,16 @@ export class VentasController {
     @Param('id') id: string,
     @Body('numeroCuota') numeroCuota: number,
     @Body('fechaPago') fechaPago: Date,
-    
   ) {
-    console.log('fechaPago recibido:', fechaPago, typeof fechaPago);
     return this.ventasService.registrarPagoCuota(id, numeroCuota, fechaPago);
+  }
+
+  @Patch(':id/abonar-cuota')
+  abonarCuota(
+    @Param('id') id: string,
+    @Body() abonarCuotaDto: AbonarCuotaDto,
+  ) {
+    return this.ventasService.abonarCuota(id, abonarCuotaDto);
   }
 
   @Post('verificar-vencimientos')

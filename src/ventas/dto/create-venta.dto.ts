@@ -5,9 +5,13 @@ import {
   ValidateNested, 
   Min, 
   IsDate,
-  IsMongoId 
+  IsMongoId,
+  IsEnum,
+  IsOptional,
+  IsBoolean
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { TipoVenta } from '../schemas/venta.schema';
 
 class ProductoVentaDto {
   @IsMongoId()
@@ -16,6 +20,11 @@ class ProductoVentaDto {
   @IsNumber()
   @Min(1)
   cantidad: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  precioVentaCustom?: number; // NUEVO: Precio personalizado
 }
 
 export class CreateVentaDto {
@@ -27,6 +36,10 @@ export class CreateVentaDto {
   @Type(() => ProductoVentaDto)
   productos: ProductoVentaDto[];
 
+  @IsEnum(TipoVenta)
+  @IsOptional()
+  tipoVenta?: TipoVenta; // NUEVO
+
   @IsNumber()
   @Min(1)
   numeroCuotas: number;
@@ -34,4 +47,8 @@ export class CreateVentaDto {
   @Type(() => Date)
   @IsDate()
   fechaPrimerPago: Date;
+
+  @IsBoolean()
+  @IsOptional()
+  pagarInmediatamente?: boolean; // NUEVO: Para ventas de contado
 }

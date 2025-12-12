@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Venta, VentaDocument, EstadoVenta, Cuota } from './schemas/venta.schema';
+import { Venta, VentaDocument, EstadoVenta, Cuota, TipoVenta } from './schemas/venta.schema';
 import { CreateVentaDto } from './dto/create-venta.dto';
+import { AbonarCuotaDto } from './dto/abonar-cuota.dto';
 import { ProductosService } from '../productos/productos.service';
 import { ClientesService } from '../clientes/clientes.service';
 import { CobrosService } from '../cobros/cobros.service';
@@ -26,48 +27,38 @@ export class VentasService {
   ) {}
 
   async create(createVentaDto: CreateVentaDto): Promise<VentaDocument> {
-    // Validar cliente
     const cliente = await this.clientesService.findOne(createVentaDto.clienteId);
 
-    // Validar y calcular productos
     let totalVenta = 0;
     const productosVenta: ProductoVentaDetalle[] = [];
 
     for (const item of createVentaDto.productos) {
       const producto = await this.productosService.findOne(item.productoId);
       
-      // Validar stock
       if (producto.stock < item.cantidad) {
         throw new BadRequestException(
           `Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock}`
         );
       }
 
-      const subtotal = producto.precioVenta * item.cantidad;
+      // Usar precio personalizado si se proporciona, sino usar precio del producto
+      const precioUnitario = item.precioVentaCustom || producto.precioVenta;
+      const subtotal = precioUnitario * item.cantidad;
       totalVenta += subtotal;
 
       productosVenta.push({
         productoId: producto._id,
         nombreProducto: producto.nombre,
         cantidad: item.cantidad,
-        precioUnitario: producto.precioVenta,
+        precioUnitario: precioUnitario,
         subtotal,
       });
 
-      // Actualizar stock
-      await this.productosService.actualizarStock(
-        item.productoId,
-        item.cantidad
-      );
-
-      // AGREGAR ESTA LÍNEA: Incrementar contador de vendidos
-      await this.productosService.incrementarVendido(
-        item.productoId,
-        item.cantidad
-      );
+      await this.productosService.actualizarStock(item.productoId, item.cantidad);
+      await this.productosService.incrementarVendido(item.productoId, item.cantidad);
     }
 
-    // Calcular cuotas
+    const tipoVenta = createVentaDto.tipoVenta || TipoVenta.CREDITO;
     const montoCuota = totalVenta / createVentaDto.numeroCuotas;
     const cuotas = this.generarCuotas(
       createVentaDto.fechaPrimerPago,
@@ -75,25 +66,51 @@ export class VentasService {
       montoCuota
     );
 
-    // Crear venta
+    // Inicializar saldoPendiente en cada cuota
+    cuotas.forEach(cuota => {
+      cuota.saldoPendiente = cuota.monto;
+    });
+
     const nuevaVenta = new this.ventaModel({
       clienteId: cliente._id,
       nombreCliente: cliente.nombreCompleto,
       productos: productosVenta,
       totalVenta,
+      tipoVenta,
       numeroCuotas: createVentaDto.numeroCuotas,
       montoCuota,
       fechaPrimerPago: createVentaDto.fechaPrimerPago,
       cuotas,
       totalPendiente: totalVenta,
+      estado: tipoVenta === TipoVenta.CONTADO && createVentaDto.pagarInmediatamente 
+        ? EstadoVenta.COMPLETADA 
+        : EstadoVenta.ACTIVA,
+      totalPagado: tipoVenta === TipoVenta.CONTADO && createVentaDto.pagarInmediatamente 
+        ? totalVenta 
+        : 0,
+      cuotasPagadas: tipoVenta === TipoVenta.CONTADO && createVentaDto.pagarInmediatamente 
+        ? createVentaDto.numeroCuotas 
+        : 0,
     });
+
+    // Si es venta de contado y se paga inmediatamente, marcar todas las cuotas como pagadas
+    if (tipoVenta === TipoVenta.CONTADO && createVentaDto.pagarInmediatamente) {
+      nuevaVenta.cuotas.forEach(cuota => {
+        cuota.pagada = true;
+        cuota.fechaPago = new Date();
+        cuota.montoPagado = cuota.monto;
+        cuota.saldoPendiente = 0;
+      });
+      nuevaVenta.totalPendiente = 0;
+    }
 
     const ventaGuardada = await nuevaVenta.save();
 
-    // Crear registros de cobro
-    await this.cobrosService.crearCobrosDesdeVenta(ventaGuardada);
+    // Solo crear cobros si no es venta de contado pagada inmediatamente
+    if (!(tipoVenta === TipoVenta.CONTADO && createVentaDto.pagarInmediatamente)) {
+      await this.cobrosService.crearCobrosDesdeVenta(ventaGuardada);
+    }
 
-    // Actualizar contador de créditos del cliente
     await this.clientesService.incrementarCreditosActivos(cliente._id.toString());
 
     return ventaGuardada;
@@ -108,11 +125,13 @@ export class VentasService {
         numeroCuota: i,
         fechaVencimiento: new Date(fecha),
         monto: montoCuota,
+        montoPagado: 0,
+        saldoPendiente: montoCuota,
         pagada: false,
         pagoTardio: false,
+        fechasPagosAbonos: []
       });
 
-      // Calcular siguiente quincena
       fecha = this.calcularSiguienteQuincena(fecha);
     }
 
@@ -124,19 +143,104 @@ export class VentasService {
     const dia = nuevaFecha.getDate();
 
     if (dia <= 15) {
-      // Si estamos en la primera quincena, ir al 30
       nuevaFecha.setDate(30);
-      // Si el mes no tiene 30 días, ajustar al último día
       if (nuevaFecha.getMonth() !== fecha.getMonth()) {
-        nuevaFecha.setDate(0); // Último día del mes anterior
+        nuevaFecha.setDate(0);
       }
     } else {
-      // Si estamos en la segunda quincena, ir al 15 del siguiente mes
       nuevaFecha.setMonth(nuevaFecha.getMonth() + 1);
       nuevaFecha.setDate(15);
     }
 
     return nuevaFecha;
+  }
+
+  async abonarCuota(ventaId: string, abonarCuotaDto: AbonarCuotaDto): Promise<VentaDocument> {
+    const venta = await this.findOne(ventaId);
+    
+    const cuota = venta.cuotas.find(c => c.numeroCuota === abonarCuotaDto.numeroCuota);
+    if (!cuota) {
+      throw new NotFoundException(`Cuota ${abonarCuotaDto.numeroCuota} no encontrada`);
+    }
+
+    if (cuota.pagada) {
+      throw new BadRequestException(`La cuota ${abonarCuotaDto.numeroCuota} ya está completamente pagada`);
+    }
+
+    // Validar que el abono no exceda el saldo pendiente
+    if (abonarCuotaDto.montoAbono > cuota.saldoPendiente) {
+      throw new BadRequestException(
+        `El abono (${abonarCuotaDto.montoAbono}) excede el saldo pendiente (${cuota.saldoPendiente})`
+      );
+    }
+
+    const pagoTardio = abonarCuotaDto.fechaPago > cuota.fechaVencimiento;
+    
+    // Actualizar monto pagado y saldo pendiente
+    cuota.montoPagado += abonarCuotaDto.montoAbono;
+    cuota.saldoPendiente -= abonarCuotaDto.montoAbono;
+    
+    // Agregar fecha de pago al historial
+    if (!cuota.fechasPagosAbonos) {
+      cuota.fechasPagosAbonos = [];
+    }
+    cuota.fechasPagosAbonos.push(abonarCuotaDto.fechaPago);
+
+    // Si se pagó completo, marcar como pagada
+    if (cuota.saldoPendiente <= 0) {
+      cuota.pagada = true;
+      cuota.fechaPago = abonarCuotaDto.fechaPago;
+      cuota.pagoTardio = pagoTardio;
+      venta.cuotasPagadas += 1;
+
+      // Actualizar score del cliente solo cuando se completa la cuota
+      await this.clientesService.actualizarScore(
+        venta.clienteId.toString(),
+        !pagoTardio
+      );
+    }
+
+    venta.totalPagado += abonarCuotaDto.montoAbono;
+    venta.totalPendiente -= abonarCuotaDto.montoAbono;
+
+    // Verificar si se completó el crédito
+    if (venta.cuotasPagadas === venta.numeroCuotas) {
+      venta.estado = EstadoVenta.COMPLETADA;
+      await this.clientesService.decrementarCreditosActivos(
+        venta.clienteId.toString()
+      );
+    }
+
+    const ventaActualizada = await this.ventaModel
+      .findByIdAndUpdate(ventaId, venta.toObject(), { new: true })
+      .exec();
+
+    if (!ventaActualizada) {
+      throw new NotFoundException(`Venta con ID ${ventaId} no encontrada`);
+    }
+
+    return ventaActualizada;
+  }
+
+  // Mantener el método antiguo por compatibilidad
+  async registrarPagoCuota(
+    ventaId: string,
+    numeroCuota: number,
+    fechaPago: Date
+  ): Promise<VentaDocument> {
+    const venta = await this.findOne(ventaId);
+    const cuota = venta.cuotas.find(c => c.numeroCuota === numeroCuota);
+    
+    if (!cuota) {
+      throw new NotFoundException(`Cuota ${numeroCuota} no encontrada`);
+    }
+
+    // Usar el nuevo método de abono con el monto completo
+    return this.abonarCuota(ventaId, {
+      numeroCuota,
+      montoAbono: cuota.saldoPendiente,
+      fechaPago
+    });
   }
 
   async findAll(): Promise<VentaDocument[]> {
@@ -179,58 +283,6 @@ export class VentasService {
       throw new NotFoundException(`Venta con ID ${id} no encontrada`);
     }
     return venta;
-  }
-
-  async registrarPagoCuota(
-    ventaId: string,
-    numeroCuota: number,
-    fechaPago: Date
-  ): Promise<VentaDocument> {
-    const venta = await this.findOne(ventaId);
-    
-    const cuota = venta.cuotas.find(c => c.numeroCuota === numeroCuota);
-    if (!cuota) {
-      throw new NotFoundException(`Cuota ${numeroCuota} no encontrada`);
-    }
-
-    if (cuota.pagada) {
-      throw new BadRequestException(`La cuota ${numeroCuota} ya está pagada`);
-    }
-
-    // Verificar si el pago es tardío
-    const pagoTardio = fechaPago > cuota.fechaVencimiento;
-    
-    cuota.pagada = true;
-    cuota.fechaPago = fechaPago;
-    cuota.pagoTardio = pagoTardio;
-
-    venta.cuotasPagadas += 1;
-    venta.totalPagado += cuota.monto;
-    venta.totalPendiente -= cuota.monto;
-
-    // Verificar si se completó el crédito
-    if (venta.cuotasPagadas === venta.numeroCuotas) {
-      venta.estado = EstadoVenta.COMPLETADA;
-      await this.clientesService.decrementarCreditosActivos(
-        venta.clienteId.toString()
-      );
-    }
-
-    // Actualizar score del cliente
-    await this.clientesService.actualizarScore(
-      venta.clienteId.toString(),
-      !pagoTardio
-    );
-
-    const ventaActualizada = await this.ventaModel
-      .findByIdAndUpdate(ventaId, venta.toObject(), { new: true })
-      .exec();
-
-    if (!ventaActualizada) {
-      throw new NotFoundException(`Venta con ID ${ventaId} no encontrada`);
-    }
-
-    return ventaActualizada;
   }
 
   async verificarVencimientos(): Promise<void> {
