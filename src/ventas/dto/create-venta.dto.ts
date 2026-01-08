@@ -1,9 +1,10 @@
-import { 
-  IsString, 
-  IsNumber, 
-  IsArray, 
-  ValidateNested, 
-  Min, 
+import {
+  IsString,
+  IsNumber,
+  IsArray,
+  ValidateNested,
+  Min,
+  Max,
   IsDate,
   IsMongoId,
   IsEnum,
@@ -24,7 +25,20 @@ class ProductoVentaDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  precioVentaCustom?: number; // NUEVO: Precio personalizado
+  precioVentaCustom?: number;
+}
+
+class DescuentoVentaDto {
+  @IsEnum(['PORCENTAJE', 'MONTO_FIJO'])
+  tipo: 'PORCENTAJE' | 'MONTO_FIJO';
+
+  @IsNumber()
+  @Min(0)
+  valor: number;
+
+  @IsOptional()
+  @IsString()
+  motivo?: string;
 }
 
 export class CreateVentaDto {
@@ -38,7 +52,7 @@ export class CreateVentaDto {
 
   @IsEnum(TipoVenta)
   @IsOptional()
-  tipoVenta?: TipoVenta; // NUEVO
+  tipoVenta?: TipoVenta;
 
   @IsNumber()
   @Min(1)
@@ -50,5 +64,27 @@ export class CreateVentaDto {
 
   @IsBoolean()
   @IsOptional()
-  pagarInmediatamente?: boolean; // NUEVO: Para ventas de contado
+  pagarInmediatamente?: boolean;
+
+  // === DESCUENTO ===
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DescuentoVentaDto)
+  descuento?: DescuentoVentaDto;
+
+  // === INTERÉS POR MORA ===
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(5) // Máximo 5% diario
+  tasaInteresMora?: number;
+
+  // === VALIDACIONES ===
+  @IsOptional()
+  @IsBoolean()
+  omitirValidacionCredito?: boolean; // Para casos especiales (admin override)
+
+  @IsOptional()
+  @IsBoolean()
+  omitirValidacionMargen?: boolean; // Para ventas promocionales
 }

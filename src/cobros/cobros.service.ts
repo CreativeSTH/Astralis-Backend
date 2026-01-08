@@ -1,72 +1,219 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Cobro, CobroDocument } from './schemas/cobro.schema';
-import { RegistrarPagoDto } from './dto/registrar-pago.dto';
-import { VentaDocument } from '../ventas/schemas/venta.schema';
+import { Venta, VentaDocument } from '../ventas/schemas/venta.schema';
+
+// DTO para la respuesta de cobros (vista virtual)
+export interface CobroVirtual {
+  _id: string; // Combina ventaId + numeroCuota para tener un ID único
+  ventaId: string;
+  clienteId: string;
+  nombreCliente: string;
+  numeroCuota: number;
+  monto: number;
+  montoPagado: number;
+  saldoPendiente: number;
+  fechaVencimiento: Date;
+  fechaPago?: Date;
+  pagado: boolean;
+  pagoTardio: boolean;
+}
 
 @Injectable()
 export class CobrosService {
   constructor(
-    @InjectModel(Cobro.name)
-    private cobroModel: Model<CobroDocument>,
+    @InjectModel(Venta.name)
+    private ventaModel: Model<VentaDocument>,
   ) {}
 
-  async crearCobrosDesdeVenta(venta: VentaDocument): Promise<void> {
-    const cobros = venta.cuotas.map(cuota => ({
-      ventaId: venta._id,
-      clienteId: venta.clienteId,
+  /**
+   * Convierte las cuotas de ventas en objetos "Cobro" virtuales
+   */
+  private ventaToCobros(venta: VentaDocument): CobroVirtual[] {
+    return venta.cuotas.map(cuota => ({
+      _id: `${venta._id}_${cuota.numeroCuota}`, // ID único compuesto
+      ventaId: venta._id.toString(),
+      clienteId: venta.clienteId?.toString() || '',
       nombreCliente: venta.nombreCliente,
       numeroCuota: cuota.numeroCuota,
       monto: cuota.monto,
+      montoPagado: cuota.montoPagado || 0,
+      saldoPendiente: cuota.saldoPendiente || cuota.monto,
       fechaVencimiento: cuota.fechaVencimiento,
-      pagado: false,
-      pagoTardio: false,
+      fechaPago: cuota.fechaPago,
+      pagado: cuota.pagada,
+      pagoTardio: cuota.pagoTardio,
     }));
-
-    await this.cobroModel.insertMany(cobros);
   }
 
-  async findAll(): Promise<CobroDocument[]> {
-    return this.cobroModel
+  /**
+   * Obtener todos los cobros (todas las cuotas de todas las ventas activas)
+   */
+  async findAll(): Promise<CobroVirtual[]> {
+    const ventas = await this.ventaModel
       .find()
       .populate('clienteId', 'nombreCompleto telefono score')
-      .populate('ventaId', 'totalVenta')
-      .sort({ fechaVencimiento: 1 })
+      .sort({ createdAt: -1 })
       .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      cobros.push(...this.ventaToCobros(venta));
+    }
+
+    return cobros.sort((a, b) => 
+      new Date(a.fechaVencimiento).getTime() - new Date(b.fechaVencimiento).getTime()
+    );
   }
 
-  async findPendientes(): Promise<CobroDocument[]> {
-    return this.cobroModel
-      .find({ pagado: false })
+  /**
+   * Obtener cobros pendientes (cuotas no pagadas)
+   */
+  async findPendientes(): Promise<CobroVirtual[]> {
+    const ventas = await this.ventaModel
+      .find({
+        'cuotas.pagada': false // Ventas que tienen al menos una cuota pendiente
+      })
       .populate('clienteId', 'nombreCompleto telefono score')
-      .sort({ fechaVencimiento: 1 })
       .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      const cuotasPendientes = this.ventaToCobros(venta)
+        .filter(cobro => !cobro.pagado);
+      cobros.push(...cuotasPendientes);
+    }
+
+    return cobros.sort((a, b) => 
+      new Date(a.fechaVencimiento).getTime() - new Date(b.fechaVencimiento).getTime()
+    );
   }
 
-  async findPagados(): Promise<CobroDocument[]> {
-    return this.cobroModel
-      .find({ pagado: true })
+  /**
+   * Obtener cobros pagados
+   */
+  async findPagados(): Promise<CobroVirtual[]> {
+    const ventas = await this.ventaModel
+      .find({
+        'cuotas.pagada': true
+      })
       .populate('clienteId', 'nombreCompleto telefono')
-      .sort({ fechaPago: -1 })
       .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      const cuotasPagadas = this.ventaToCobros(venta)
+        .filter(cobro => cobro.pagado);
+      cobros.push(...cuotasPagadas);
+    }
+
+    return cobros.sort((a, b) => {
+      const fechaA = a.fechaPago ? new Date(a.fechaPago).getTime() : 0;
+      const fechaB = b.fechaPago ? new Date(b.fechaPago).getTime() : 0;
+      return fechaB - fechaA;
+    });
   }
 
-  async findProximaQuincena(): Promise<CobroDocument[]> {
+  /**
+   * Obtener cobros de la próxima quincena
+   */
+  async findProximaQuincena(): Promise<CobroVirtual[]> {
     const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
     const finQuincena = this.calcularFinQuincena(hoy);
 
-    return this.cobroModel
+    const ventas = await this.ventaModel
       .find({
-        pagado: false,
-        fechaVencimiento: {
+        'cuotas.pagada': false,
+        'cuotas.fechaVencimiento': {
           $gte: hoy,
           $lte: finQuincena,
-        },
+        }
       })
       .populate('clienteId', 'nombreCompleto telefono direccion score')
-      .sort({ fechaVencimiento: 1 })
       .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      const cuotasQuincena = this.ventaToCobros(venta)
+        .filter(cobro => 
+          !cobro.pagado &&
+          new Date(cobro.fechaVencimiento) >= hoy &&
+          new Date(cobro.fechaVencimiento) <= finQuincena
+        );
+      cobros.push(...cuotasQuincena);
+    }
+
+    return cobros.sort((a, b) => 
+      new Date(a.fechaVencimiento).getTime() - new Date(b.fechaVencimiento).getTime()
+    );
+  }
+
+  /**
+   * Obtener cobros vencidos
+   */
+  async findVencidos(): Promise<CobroVirtual[]> {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const ventas = await this.ventaModel
+      .find({
+        'cuotas.pagada': false,
+        'cuotas.fechaVencimiento': { $lt: hoy }
+      })
+      .populate('clienteId', 'nombreCompleto telefono')
+      .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      const cuotasVencidas = this.ventaToCobros(venta)
+        .filter(cobro => 
+          !cobro.pagado &&
+          new Date(cobro.fechaVencimiento) < hoy
+        );
+      cobros.push(...cuotasVencidas);
+    }
+
+    return cobros.sort((a, b) => 
+      new Date(a.fechaVencimiento).getTime() - new Date(b.fechaVencimiento).getTime()
+    );
+  }
+
+  /**
+   * Obtener cobros por cliente
+   */
+  async findByCliente(clienteId: string): Promise<CobroVirtual[]> {
+    const ventas = await this.ventaModel
+      .find({ clienteId })
+      .sort({ createdAt: -1 })
+      .exec();
+
+    const cobros: CobroVirtual[] = [];
+    for (const venta of ventas) {
+      cobros.push(...this.ventaToCobros(venta));
+    }
+
+    return cobros.sort((a, b) => 
+      new Date(a.fechaVencimiento).getTime() - new Date(b.fechaVencimiento).getTime()
+    );
+  }
+
+  /**
+   * Obtener totales para el dashboard
+   */
+  async obtenerTotales() {
+    const pendientes = await this.findPendientes();
+    const proximaQuincena = await this.findProximaQuincena();
+
+    const totalPendiente = pendientes.reduce((sum, cobro) => sum + cobro.saldoPendiente, 0);
+    const totalProximaQuincena = proximaQuincena.reduce((sum, cobro) => sum + cobro.saldoPendiente, 0);
+
+    return {
+      totalPendiente,
+      cantidadPendiente: pendientes.length,
+      totalProximaQuincena,
+      cantidadProximaQuincena: proximaQuincena.length,
+    };
   }
 
   private calcularFinQuincena(fecha: Date): Date {
@@ -76,82 +223,10 @@ export class CobrosService {
     if (dia <= 15) {
       finQuincena.setDate(15);
     } else {
-      finQuincena.setMonth(finQuincena.getMonth() + 1, 0); // Último día del mes
+      finQuincena.setMonth(finQuincena.getMonth() + 1, 0);
     }
 
     finQuincena.setHours(23, 59, 59, 999);
     return finQuincena;
-  }
-
-  async findByCliente(clienteId: string): Promise<CobroDocument[]> {
-    return this.cobroModel
-      .find({ clienteId })
-      .populate('ventaId', 'totalVenta productos')
-      .sort({ fechaVencimiento: 1 })
-      .exec();
-  }
-
-  async findVencidos(): Promise<CobroDocument[]> {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-
-    return this.cobroModel
-      .find({
-        pagado: false,
-        fechaVencimiento: { $lt: hoy },
-      })
-      .populate('clienteId', 'nombreCompleto telefono')
-      .sort({ fechaVencimiento: 1 })
-      .exec();
-  }
-
-  async registrarPago(
-    id: string,
-    registrarPagoDto: RegistrarPagoDto
-  ): Promise<CobroDocument> {
-    const cobro = await this.cobroModel.findById(id).exec();
-    
-    if (!cobro) {
-      throw new NotFoundException(`Cobro con ID ${id} no encontrado`);
-    }
-
-    const pagoTardio = registrarPagoDto.fechaPago > cobro.fechaVencimiento;
-
-    const cobroActualizado = await this.cobroModel
-      .findByIdAndUpdate(
-        id,
-        {
-          pagado: true,
-          fechaPago: registrarPagoDto.fechaPago,
-          pagoTardio,
-          notas: registrarPagoDto.notas,
-        },
-        { new: true }
-      )
-      .exec();
-
-    if (!cobroActualizado) {
-      throw new NotFoundException(`Cobro con ID ${id} no encontrado`);
-    }
-
-    return cobroActualizado;
-  }
-
-  async obtenerTotales() {
-    const pendientes = await this.cobroModel
-      .find({ pagado: false })
-      .exec();
-
-    const proximaQuincena = await this.findProximaQuincena();
-
-    const totalPendiente = pendientes.reduce((sum, cobro) => sum + cobro.monto, 0);
-    const totalProximaQuincena = proximaQuincena.reduce((sum, cobro) => sum + cobro.monto, 0);
-
-    return {
-      totalPendiente,
-      cantidadPendiente: pendientes.length,
-      totalProximaQuincena,
-      cantidadProximaQuincena: proximaQuincena.length,
-    };
   }
 }

@@ -1,4 +1,15 @@
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsNumber, Min, IsEnum, IsArray, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { TipoNotaCliente } from '../schemas/cliente.schema';
+
+export class CreateNotaClienteDto {
+  @IsString()
+  texto: string;
+
+  @IsOptional()
+  @IsEnum(TipoNotaCliente)
+  tipo?: TipoNotaCliente;
+}
 
 export class CreateClienteDto {
   @IsString()
@@ -14,4 +25,9 @@ export class CreateClienteDto {
   @IsOptional()
   @IsString()
   direccion?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  limiteCredito?: number;
 }

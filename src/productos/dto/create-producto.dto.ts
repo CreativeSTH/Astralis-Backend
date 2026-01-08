@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsOptional, Min, IsEnum, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsNumber, IsOptional, Min, IsEnum, IsArray, ValidateNested, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TipoProducto } from '../schemas/producto.schema';
 
@@ -48,4 +48,12 @@ export class CreateProductoDto {
   @ValidateNested({ each: true })
   @Type(() => AcordeProductoDto)
   acordes?: AcordeProductoDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  visibleInStore?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  featured?: boolean;
 }

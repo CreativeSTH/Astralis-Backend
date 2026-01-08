@@ -68,6 +68,13 @@ export class Producto {
 
   @Prop({ default: true })
   activo: boolean;
+
+  // Store visibility fields
+  @Prop({ default: false })
+  visibleInStore: boolean;
+
+  @Prop({ default: false })
+  featured: boolean;
 }
 
 export const ProductoSchema = SchemaFactory.createForClass(Producto);
